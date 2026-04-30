@@ -49,21 +49,32 @@ DEMO_TEXT = """(1)В один прекрасный день мы – пять д
 (36)Когда я думаю о людях сильной воли, сильной страсти к искусству, я всегда вспоминаю его – чудесного актёра Иллариона Певцова. (37)И мне приятно думать, что наши смешные попугайно-пёстрые букеты из осенних листьев были, может статься, первыми цветами, поднесёнными ему на трудном, но победном пути."""
 
 # ==========================================
-# 2. БАЗА ДАННЫХ
+# 2. БАЗА ДАННЫХ И МИГРАЦИЯ
 # ==========================================
 DB_PATH = "axiology_annotations.db"
+EXPECTED_SCHEMA = {
+    'annotator_id': 'TEXT', 'annotator_gender': 'TEXT', 'annotator_age': 'INTEGER',
+    'is_anonymous': 'BOOLEAN', 'text_source': 'TEXT', 'sentence_id': 'INTEGER',
+    'word_form': 'TEXT', 'lemma': 'TEXT', 'pos': 'TEXT', 'morph_features': 'TEXT',
+    'syntactic_scheme': 'TEXT', 'selected_axiologeme': 'TEXT', 'morphemes': 'TEXT',
+    'stylistic_type': 'TEXT', 'stylistic_subtype': 'TEXT', 'derivatives': 'TEXT',
+    'illocutionary_force': 'TEXT', 'is_direct_speech': 'BOOLEAN',
+    'sentence_context': 'TEXT', 'justification': 'TEXT', 'timestamp': 'TEXT'
+}
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS annotations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        annotator_id TEXT, annotator_gender TEXT, annotator_age INTEGER, is_anonymous BOOLEAN,
-        text_source TEXT, sentence_id INTEGER, word_form TEXT, lemma TEXT, pos TEXT,
-        morph_features TEXT, syntactic_scheme TEXT, selected_axiologeme TEXT, morphemes TEXT,
-        stylistic_type TEXT, stylistic_subtype TEXT, derivatives TEXT, illocutionary_force TEXT,
-        is_direct_speech BOOLEAN, sentence_context TEXT, justification TEXT, timestamp TEXT
-    )''')
+    # Создаём таблицу, если её нет
+    cols_def = "id INTEGER PRIMARY KEY AUTOINCREMENT, " + ", ".join([f"{k} {v}" for k, v in EXPECTED_SCHEMA.items()])
+    c.execute(f"CREATE TABLE IF NOT EXISTS annotations ({cols_def})")
+    
+    # Миграция: добавляем недостающие столбцы в старых БД
+    c.execute("PRAGMA table_info(annotations)")
+    existing_cols = {row[1] for row in c.fetchall()}
+    for col, col_type in EXPECTED_SCHEMA.items():
+        if col not in existing_cols:
+            c.execute(f"ALTER TABLE annotations ADD COLUMN {col} {col_type}")
     conn.commit()
     conn.close()
 
@@ -71,13 +82,9 @@ def save_annotation(data):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
-        cols = ("annotator_id, annotator_gender, annotator_age, is_anonymous, text_source, sentence_id, word_form, lemma, pos, morph_features, syntactic_scheme, selected_axiologeme, morphemes, stylistic_type, stylistic_subtype, derivatives, illocutionary_force, is_direct_speech, sentence_context, justification, timestamp")
-        placeholders = ", ".join(["?"] * 21)
-        vals = (data['annotator_id'], data['annotator_gender'], data['annotator_age'], data['is_anonymous'],
-                data['text_source'], data['sentence_id'], data['word_form'], data['lemma'], data['pos'], 
-                data['morph_features'], data['syntactic_scheme'], data['selected_axiologeme'], data['morphemes'],
-                data['stylistic_type'], data['stylistic_subtype'], data['derivatives'], data['illocutionary_force'],
-                data['is_direct_speech'], data['sentence_context'], data['justification'], data['timestamp'])
+        cols = ", ".join(EXPECTED_SCHEMA.keys())
+        placeholders = ", ".join(["?"] * len(EXPECTED_SCHEMA))
+        vals = [data[k] for k in EXPECTED_SCHEMA.keys()]
         c.execute(f"INSERT INTO annotations ({cols}) VALUES ({placeholders})", vals)
         conn.commit()
         return True
@@ -89,45 +96,42 @@ def save_annotation(data):
 
 def load_annotations():
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM annotations", conn)
+    try:
+        df = pd.read_sql_query("SELECT * FROM annotations", conn)
+    except Exception:
+        df = pd.DataFrame()
     conn.close()
+    # Гарантируем наличие всех столбцов в DataFrame
+    for col in EXPECTED_SCHEMA.keys():
+        if col not in df.columns:
+            df[col] = None
     return df
 
 init_db()
 
 # ==========================================
-# 3. NLP МОДУЛЬ (pymorphy3)
+# 3. NLP МОДУЛЬ
 # ==========================================
 morph = pymorphy3.MorphAnalyzer()
 
 def analyze_morphology(word):
     parses = morph.parse(word)
-    if not parses:
-        return "X-X-X-X-X-X-X-X-X-X-X-X", word, "X"
-    p = parses[0]
-    tag = p.tag
-    
-    def safe(attr):
-        v = getattr(tag, attr, None)
-        return str(v) if v else "X"
-
-    is_short = "кратк" if hasattr(tag, 'shortness') and tag.shortness else ("кратк" if "кратк" in str(tag).lower() else "полн")
-    
-    morph_str = f"{safe('case')}-{safe('number')}-{safe('gender')}-{safe('animacy')}-{safe('mood')}-{safe('tense')}-{safe('person')}-{safe('voice')}-{safe('aspect')}-{safe('comparative')}-{is_short}-X"
-    return morph_str, p.normal_form, tag.POS or "X"
+    if not parses: return "X-X-X-X-X-X-X-X-X-X-X-X", word, "X"
+    p = parses[0]; tag = p.tag
+    safe = lambda attr: str(getattr(tag, attr, None) or "X")
+    is_short = "кратк" if getattr(tag, 'shortness', False) else ("кратк" if "кратк" in str(tag).lower() else "полн")
+    return f"{safe('case')}-{safe('number')}-{safe('gender')}-{safe('animacy')}-{safe('mood')}-{safe('tense')}-{safe('person')}-{safe('voice')}-{safe('aspect')}-{safe('comparative')}-{is_short}-X", p.normal_form, tag.POS or "X"
 
 def is_direct_speech(sentence):
     return bool(re.search(r'^(–|—|"|«|“)|[–—]$', sentence.strip()))
 
 def split_text_sentences(text):
-    parts = re.split(r'(\(\d+\))', text)
-    sentences, current = [], ""
+    parts, sentences, current = re.split(r'(\(\d+\))', text), [], ""
     for p in parts:
         if re.match(r'^\(\d+\)$', p):
             if current.strip(): sentences.append(current.strip())
             current = p + " "
-        else:
-            current += p
+        else: current += p
     if current.strip(): sentences.append(current.strip())
     return sentences
 
@@ -148,13 +152,11 @@ if not st.session_state.annotator_confirmed:
     with st.form("annotator_form"):
         is_anon = st.checkbox("Анонимная разметка", value=True)
         if not is_anon:
-            col1, col2 = st.columns(2)
-            annot_id = col1.text_input("ID / Логин")
-            gender = col2.selectbox("Пол", ["М", "Ж", "Не указан"])
+            c1, c2 = st.columns(2)
+            annot_id = c1.text_input("ID / Логин")
+            gender = c2.selectbox("Пол", ["М", "Ж", "Не указан"])
             age = st.number_input("Возраст", min_value=16, max_value=100, value=25)
-        else:
-            annot_id, gender, age = "anon", "X", 0
-            
+        else: annot_id, gender, age = "anon", "X", 0
         if st.form_submit_button("✅ Подтвердить и начать"):
             st.session_state.annotator_info = {"id": annot_id, "gender": gender, "age": age, "is_anonymous": is_anon}
             st.session_state.annotator_confirmed = True
@@ -171,7 +173,7 @@ else:
     
     st.divider()
     st.markdown("📄 **Полный текст для ознакомления:**")
-    st.text_area("Текст:", value=raw_text if raw_text else "", height=300, disabled=True, label_visibility="collapsed")
+    st.text_area("Текст:", value=raw_text or "", height=250, disabled=True, label_visibility="collapsed")
     st.divider()
 
     if raw_text:
@@ -183,97 +185,84 @@ else:
         if selected_axios:
             cols_info = st.columns(min(len(selected_axios), 4))
             for i, ax in enumerate(selected_axios):
-                left = 5 - st.session_state.axio_counts.get(ax, 0)
-                cols_info[i % 4].metric(label=ax, value=f"{max(0, left)} слотов")
+                left = max(0, 5 - st.session_state.axio_counts.get(ax, 0))
+                cols_info[i % 4].metric(label=ax, value=f"{left} слотов")
         
         if selected_axios:
             st.divider()
             # --- ШАГ 3: КЛИК ПО СЛОВАМ ---
             st.header("🖱️ Шаг 4: Кликните на слово-репрезентант")
             sentences = split_text_sentences(raw_text)
-            
             cols = st.columns(8)
-            word_counter = 0
+            wc = 0
             for s_idx, sent in enumerate(sentences):
                 clean_sent = re.sub(r'\(\d+\)', '', sent)
                 words = re.findall(r'\b[а-яА-ЯёЁ\-]+\b', clean_sent)
                 for w in words:
-                    col = cols[word_counter % 8]
-                    btn = col.button(w, key=f"btn_{s_idx}_{word_counter}", use_container_width=True)
-                    if btn:
-                        can_select = True
+                    col = cols[wc % 8]
+                    if col.button(w, key=f"btn_{s_idx}_{wc}", use_container_width=True):
+                        can = True
                         for ax in selected_axios:
                             if st.session_state.axio_counts.get(ax, 0) >= 5:
                                 st.error(f"❌ Лимит (5 слов) для '{ax}' превышен.")
-                                can_select = False
-                                break
-                        if can_select:
+                                can = False; break
+                        if can:
                             st.session_state.selected_word_data = {"word": w, "sentence": sent, "sent_id": s_idx}
                             st.rerun()
-                    word_counter += 1
+                    wc += 1
 
-            # --- ШАГ 4: ФОРМА РАЗМЕТКИ (ИСПРАВЛЕНО) ---
-            if st.session_state.selected_word_data:
+            # --- ШАГ 4: ФОРМА РАЗМЕТКИ ---
+            if st.session_state.selected_word_
                 st.divider()
-                st.info(f"🔍 **Слово:** `{st.session_state.selected_word_data['word']}` | **Предложение №{st.session_state.selected_word_data['sent_id']}**")
-                st.markdown(f"📖 *{st.session_state.selected_word_data['sentence']}*")
+                wd = st.session_state.selected_word_data
+                st.info(f"🔍 **Слово:** `{wd['word']}` | **Предложение №{wd['sent_id']}**")
+                st.markdown(f"📖 *{wd['sentence']}*")
                 
-                w_data = st.session_state.selected_word_data
-                auto_morph, lemma, pos = analyze_morphology(w_data["word"])
-                is_direct = is_direct_speech(w_data["sentence"])
+                auto_morph, lemma, pos = analyze_morphology(wd["word"])
+                is_direct = is_direct_speech(wd["sentence"])
 
                 st.subheader("📝 Параметры разметки")
                 with st.form("annotation_form"):
                     axio = st.selectbox("Аксиологема:", selected_axios)
-                    
-                    morphemes = st.multiselect("Морфемы:", 
-                        ["диминутивные", "аугментативные", "мелиоративные", "пейоративные", 
-                         "частичности", "недостаточности", "чрезмерности", "приблизительности"])
-                    
+                    morphemes = st.multiselect("Морфемы:", ["диминутивные", "аугментативные", "мелиоративные", "пейоративные", "частичности", "недостаточности", "чрезмерности", "приблизительности"])
                     morph_features = st.text_input("Морфология (авто):", value=auto_morph)
                     syntactic_scheme = st.text_input("Синтаксис (структурная схема):", value="X")
-                    
-                    col1, col2 = st.columns(2)
-                    stylistic_type = col1.selectbox("Стилистика (Тип):", list(STYLISTIC_HIERARCHY.keys()))
-                    stylistic_subtype = col2.selectbox("Стилистика (Подтип):", STYLISTIC_HIERARCHY.get(stylistic_type, []))
-                    
+                    c1, c2 = st.columns(2)
+                    stylistic_type = c1.selectbox("Стилистика (Тип):", list(STYLISTIC_HIERARCHY.keys()))
+                    stylistic_subtype = c2.selectbox("Стилистика (Подтип):", STYLISTIC_HIERARCHY.get(stylistic_type, []))
                     derivatives = st.text_input("Производные в тексте:")
                     
                     illoc_force = "Нет (не в прямой речи)"
                     sentence_context = None
-                    
                     if is_direct:
                         st.warning("⚠️ Слово в **прямой речи**. Укажите иллокутивную силу (предложение будет сохранено).")
                         illoc_force = st.selectbox("Иллокутивная сила (Дж. Серль):", ILLOCUTIONARY_FORCES)
-                        sentence_context = w_data["sentence"]
+                        sentence_context = wd["sentence"]
                         st.text_area("Контекст предложения:", value=sentence_context, disabled=True)
                         
                     justification = st.text_area("Обоснование выбора:")
                     
                     if st.form_submit_button("💾 Сохранить аннотацию"):
-                        save_data = {
+                        data = {k: None for k in EXPECTED_SCHEMA.keys()}
+                        data.update({
                             "annotator_id": info['id'], "annotator_gender": info['gender'],
                             "annotator_age": info['age'], "is_anonymous": info['is_anonymous'],
                             "text_source": "DEMO" if text_mode.startswith("Демо") else "CUSTOM",
-                            "sentence_id": w_data['sent_id'], "word_form": w_data['word'],
-                            "lemma": lemma, "pos": pos, "morph_features": morph_features,
-                            "syntactic_scheme": syntactic_scheme, "selected_axiologeme": axio,
-                            "morphemes": ", ".join(morphemes), "stylistic_type": stylistic_type,
-                            "stylistic_subtype": stylistic_subtype, "derivatives": derivatives,
-                            "illocutionary_force": illoc_force, "is_direct_speech": is_direct,
-                            "sentence_context": sentence_context,
-                            "justification": justification,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
-                        if save_annotation(save_data):
-                            st.session_state.axio_counts[axio] += 1
+                            "sentence_id": wd['sent_id'], "word_form": wd['word'], "lemma": lemma, "pos": pos,
+                            "morph_features": morph_features, "syntactic_scheme": syntactic_scheme,
+                            "selected_axiologeme": axio, "morphemes": ", ".join(morphemes),
+                            "stylistic_type": stylistic_type, "stylistic_subtype": stylistic_subtype,
+                            "derivatives": derivatives, "illocutionary_force": illoc_force,
+                            "is_direct_speech": is_direct, "sentence_context": sentence_context,
+                            "justification": justification, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        if save_annotation(data):
+                            st.session_state.axio_counts[axio] = st.session_state.axio_counts.get(axio, 0) + 1
                             st.success("✅ Аннотация сохранена!")
                             st.session_state.selected_word_data = None
                             st.rerun()
 
-                if st.button("❌ Отменить выбор слова"):
-                    st.session_state.selected_word_data = None
-                    st.rerun()
+                if st.button("❌ Отменить выбор слова"): st.session_state.selected_word_data = None; st.rerun()
 
 # ==========================================
 # 5. ПАНЕЛИ УПРАВЛЕНИЯ И СТАТИСТИКИ
@@ -284,46 +273,32 @@ tab_ctrl, tab_stats = st.tabs(["🔐 Управление данными", "📊
 with tab_ctrl:
     st.subheader("📋 Размеченные данные")
     password = st.text_input("🔑 Пароль администратора:", type="password", key="admin_pass")
-    if password == "axio2026":
-        st.session_state.admin_logged = True
+    if password == "axio2026": st.session_state.admin_logged = True
         
     if st.session_state.admin_logged:
         df = load_annotations()
         if df.empty:
             st.info("Пока нет сохраненных аннотаций.")
         else:
-            # Скачивание
             csv_data = df.to_csv(index=False).encode('utf-8')
             st.download_button(label="📥 Скачать итоговую таблицу (CSV)", data=csv_data, file_name="annotations_export.csv", mime="text/csv")
-            
             st.divider()
             st.subheader("✏️ Редактирование и удаление")
             edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, hide_index=True, key="data_editor")
             
             if st.button("💾 Применить изменения"):
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.cursor()
+                conn = sqlite3.connect(DB_PATH); cursor = conn.cursor()
                 cursor.execute("DELETE FROM annotations")
                 for _, row in edited_df.iterrows():
                     cols_list = [c for c in edited_df.columns if c != 'id']
-                    vals = [row[c] for c in cols_list]
-                    placeholders = ", ".join(["?"] * len(vals))
-                    cursor.execute(f"INSERT INTO annotations ({', '.join(cols_list)}) VALUES ({placeholders})", vals)
-                conn.commit()
-                conn.close()
-                st.success("✅ Изменения сохранены в БД!")
-                st.rerun()
-                
+                    vals = [row.get(c, None) for c in cols_list]
+                    cursor.execute(f"INSERT INTO annotations ({', '.join(cols_list)}) VALUES ({', '.join(['?']*len(vals))})", vals)
+                conn.commit(); conn.close()
+                st.success("✅ Изменения сохранены!"); st.rerun()
             if st.button("🗑️ Полностью очистить базу"):
-                conn = sqlite3.connect(DB_PATH)
-                conn.execute("DELETE FROM annotations")
-                conn.commit()
-                conn.close()
-                st.session_state.axio_counts.clear()
-                st.success("🗑️ База очищена.")
-                st.rerun()
-    else:
-        st.info("🔒 Введите пароль для доступа.")
+                conn = sqlite3.connect(DB_PATH); conn.execute("DELETE FROM annotations"); conn.commit(); conn.close()
+                st.session_state.axio_counts.clear(); st.success("🗑️ База очищена."); st.rerun()
+    else: st.info("🔒 Введите пароль для доступа.")
 
 with tab_stats:
     st.subheader("📊 Визуальная аналитика")
@@ -334,15 +309,21 @@ with tab_stats:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("### Распределение аксиологем")
-            axio_counts = df["selected_axiologeme"].value_counts().reset_index()
-            axio_counts.columns = ["Аксиологема", "Количество"]
-            st.bar_chart(axio_counts.set_index("Аксиологема"))
+            col_axio = 'selected_axiologeme'
+            if col_axio in df.columns and df[col_axio].notna().any():
+                axio_counts = df[col_axio].value_counts().reset_index()
+                axio_counts.columns = ["Аксиологема", "Количество"]
+                st.bar_chart(axio_counts.set_index("Аксиологема"))
+            else: st.info("Нет данных по аксиологемам.")
         with c2:
             st.markdown("### Иллокутивные силы (прямая речь)")
-            illoc_df = df[df["is_direct_speech"]]
-            if not illoc_df.empty:
-                illoc_counts = illoc_df["illocutionary_force"].value_counts().reset_index()
-                illoc_counts.columns = ["Сила", "Количество"]
-                st.bar_chart(illoc_counts.set_index("Сила"))
-            else:
-                st.info("Нет разметки прямой речи.")
+            col_dir = 'is_direct_speech'
+            col_illoc = 'illocutionary_force'
+            if col_dir in df.columns and col_illoc in df.columns:
+                illoc_df = df[df[col_dir].astype(bool)]
+                if not illoc_df.empty and illoc_df[col_illoc].notna().any():
+                    illoc_counts = illoc_df[col_illoc].value_counts().reset_index()
+                    illoc_counts.columns = ["Сила", "Количество"]
+                    st.bar_chart(illoc_counts.set_index("Сила"))
+                else: st.info("Нет разметки прямой речи.")
+            else: st.info("Столбцы статистики недоступны.")
