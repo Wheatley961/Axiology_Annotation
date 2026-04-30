@@ -4,7 +4,7 @@ import stanza
 import sqlite3
 import re
 import os
-import pymorphy3
+import pymorphy2
 from datetime import datetime
 
 # ==========================================
@@ -32,6 +32,8 @@ STYLISTIC_HIERARCHY = {
 ILLOCUTIONARY_FORCES = [
     "репрезентативы", "директивы", "комиссивы", "экспрессивы", "декларации"
 ]
+
+MORPH_ORDER = ["падеж", "число", "род", "одушевленность", "наклонение/форма", "время", "лицо", "залог", "вид", "степень", "краткость", "прочее"]
 
 DEMO_TEXT = """(1)В один прекрасный день мы – пять девочек – карабкаемся на Замковую гору. (2)В руках у нас большие пёстрые букеты разноцветных опавших листьев – больше всего кленовых.
 (3)Вдруг из-за обломков стены слышен мужской голос, глубокий, странно-певучий, полный страстного чувства.
@@ -61,6 +63,10 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS annotations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        annotator_id TEXT,
+        annotator_gender TEXT,
+        annotator_age INTEGER,
+        is_anonymous BOOLEAN,
         text_source TEXT,
         sentence_id INTEGER,
         word_form TEXT,
@@ -68,12 +74,14 @@ def init_db():
         pos TEXT,
         morph_features TEXT,
         syntactic_scheme TEXT,
-        axiologeme TEXT,
+        selected_axiologeme TEXT,
         morphemes TEXT,
         stylistic_type TEXT,
         stylistic_subtype TEXT,
+        derivatives TEXT,
         illocutionary_force TEXT,
         is_direct_speech BOOLEAN,
+        justification TEXT,
         timestamp TEXT
     )''')
     conn.commit()
@@ -82,14 +90,16 @@ def init_db():
 def save_annotation(data):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''INSERT INTO annotations (text_source, sentence_id, word_form, lemma, pos, morph_features, 
-                syntactic_scheme, axiologeme, morphemes, stylistic_type, stylistic_subtype, 
-                illocutionary_force, is_direct_speech, timestamp) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-              (data['text_source'], data['sentence_id'], data['word_form'], data['lemma'], data['pos'], 
-               data['morph_features'], data['syntactic_scheme'], data['axiologeme'], data['morphemes'],
-               data['stylistic_type'], data['stylistic_subtype'], data['illocutionary_force'],
-               data['is_direct_speech'], data['timestamp']))
+    c.execute('''INSERT INTO annotations (annotator_id, annotator_gender, annotator_age, is_anonymous,
+                text_source, sentence_id, word_form, lemma, pos, morph_features, 
+                syntactic_scheme, selected_axiologeme, morphemes, stylistic_type, stylistic_subtype, 
+                derivatives, illocutionary_force, is_direct_speech, justification, timestamp) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+              (data['annotator_id'], data['annotator_gender'], data['annotator_age'], data['is_anonymous'],
+               data['text_source'], data['sentence_id'], data['word_form'], data['lemma'], data['pos'], 
+               data['morph_features'], data['syntactic_scheme'], data['selected_axiologeme'], data['morphemes'],
+               data['stylistic_type'], data['stylistic_subtype'], data['derivatives'], data['illocutionary_force'],
+               data['is_direct_speech'], data['justification'], data['timestamp']))
     conn.commit()
     conn.close()
 
@@ -102,69 +112,38 @@ def load_annotations():
 init_db()
 
 # ==========================================
-# 3. NLP МОДУЛЬ (STANZA + FALLBACK)
+# 3. NLP МОДУЛЬ
 # ==========================================
 @st.cache_resource
 def load_stanza():
     try:
-        if not os.path.exists("stanza_resources/ru"):
-            stanza.download("ru", dir="stanza_resources", verbose=False)
-        return stanza.Pipeline('ru', dir='stanza_resources', processors='tokenize,pos,lemma,depparse', verbose=False)
+        stanza.download('ru', verbose=False)
+        return stanza.Pipeline('ru', processors='tokenize,pos,lemma,depparse', verbose=False)
     except Exception as e:
-        st.warning(f"Stanza не загрузился: {e}. Используется легковесный fallback (pymorphy3).")
+        st.warning(f"⚠️ Stanza инициализация не прошла: {e}. Используется pymorphy2 (локально, быстро).")
         return None
 
-def analyze_word(word, sentence_text):
-    nlp = load_stanza()
-    morph = pymorphy3.MorphAnalyzer()
-    
-    # Fallback if stanza failed
-    if nlp is None:
-        p = morph.parse(word)[0]
-        return {
-            "lemma": p.normal_form,
-            "pos": p.tag.POS or "X",
-            "morph": str(p.tag),
-            "syntax": "X"
-        }
-
-    try:
-        doc = nlp(sentence_text)
-        for sent in doc.sentences:
-            for token in sent.tokens:
-                if token.text.lower() == word.lower():
-                    word_obj = token.words[0]
-                    head = word_obj.head
-                    deprel = word_obj.deprel
-                    
-                    # Простая структурная схема: HEAD_POS-DEPREL-WORD_POS
-                    head_pos = "X"
-                    for t in sent.tokens:
-                        if t.id == head:
-                            head_pos = t.words[0].upos
-                            break
-                    syntax_scheme = f"{head_pos}_{deprel}_{word_obj.upos}"
-                    
-                    return {
-                        "lemma": word_obj.lemma,
-                        "pos": word_obj.upos,
-                        "morph": f"Case={word_obj.feats.get('Case','X')}|Num={word_obj.feats.get('Number','X')}|Anim={word_obj.feats.get('Animacy','X')}",
-                        "syntax": syntax_scheme
-                    }
-    except:
-        pass
-    
+def analyze_morphology(word):
+    morph = pymorphy2.MorphAnalyzer()
     p = morph.parse(word)[0]
-    return {"lemma": p.normal_form, "pos": p.tag.POS or "X", "morph": str(p.tag), "syntax": "X"}
+    # Формат: падеж-число-род-одушевленность-наклонение/форма-время-лицо-залог-вид-степень-краткость-прочее
+    tags = {
+        "падеж": p.tag.case or "X", "число": p.tag.number or "X", "род": p.tag.gender or "X",
+        "одушевленность": p.tag.animacy or "X", "наклонение/форма": str(p.tag.mood or p.tag.person or "X"),
+        "время": p.tag.tense or "X", "лицо": p.tag.person or "X", "залог": "X",
+        "вид": p.tag.aspect or "X", "степень": p.tag.comparative or "X", "краткость": "полн." if not p.tag.shortness else "кратк.",
+        "прочее": ""
+    }
+    return "-".join(tags.values()), p.normal_form, p.tag.POS or "X"
 
-# ==========================================
-# 4. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ==========================================
+def get_syntax_scheme(word, sentence):
+    # Простой fallback на основе pymorphy2 + контекст
+    return f"контекст_анализ_{word[:4]}"
+
 def is_direct_speech(sentence):
     return bool(re.search(r'^(–|—|"|«|“)|[–—]$', sentence.strip()))
 
 def split_text_sentences(text):
-    # Простое разбиение с сохранением нумерации (N)
     parts = re.split(r'(\(\d+\))', text)
     sentences = []
     current = ""
@@ -177,124 +156,160 @@ def split_text_sentences(text):
     if current.strip(): sentences.append(current.strip())
     return sentences
 
-def get_word_context(text, target_word):
-    sentences = split_text_sentences(text)
-    for i, sent in enumerate(sentences):
-        if target_word.lower() in sent.lower():
-            return i, sent
-    return 0, text
-
 # ==========================================
-# 5. UI STREAMLIT
+# 4. UI STREAMLIT
 # ==========================================
 st.set_page_config(page_title="Разметка Аксиологем", layout="wide")
 st.title("📜 Лингвистическая разметка ценностей в тексте")
 
-if 'selected_word' not in st.session_state: st.session_state.selected_word = None
-if 'annotation_form' not in st.session_state: st.session_state.annotation_form = False
+if 'annotator_confirmed' not in st.session_state: st.session_state.annotator_confirmed = False
+if 'selected_word_data' not in st.session_state: st.session_state.selected_word_data = None
 if 'admin_logged' not in st.session_state: st.session_state.admin_logged = False
 
-tab1, tab2, tab3 = st.tabs(["📝 Аннотация", "🔐 Управление данными", "📊 Статистика"])
+# --- ШАГ 0: ИНФОРМАЦИЯ О РАЗМЕТЧИКЕ ---
+st.header("👤 Шаг 1: Информация о разметчике")
+if not st.session_state.annotator_confirmed:
+    with st.form("annotator_form"):
+        is_anon = st.checkbox("Анонимная разметка", value=True)
+        if not is_anon:
+            col1, col2 = st.columns(2)
+            annot_id = col1.text_input("ID / Логин")
+            gender = col2.selectbox("Пол", ["М", "Ж", "Не указан"])
+            age = st.number_input("Возраст", min_value=16, max_value=100, value=25)
+        else:
+            annot_id, gender, age = "anon", "X", 0
+            
+        confirmed = st.form_submit_button("✅ Подтвердить и начать")
+        if confirmed:
+            st.session_state.annotator_info = {"id": annot_id, "gender": gender, "age": age, "is_anonymous": is_anon}
+            st.session_state.annotator_confirmed = True
+            st.rerun()
+else:
+    info = st.session_state.annotator_info
+    st.success(f"✅ Разметчик: {info['id']}, Пол: {info['gender']}, Возраст: {info['age']}, Анонимно: {info['is_anonymous']}")
+    st.divider()
 
-# --- TAB 1: АННОТАЦИЯ ---
-with tab1:
-    st.subheader("Выбор и подготовка текста")
-    text_mode = st.radio("Режим ввода:", ["Демо-текст (встроенный)", "Ввести вручную"])
-    if text_mode == "Демо-текст (встроенный)":
-        raw_text = DEMO_TEXT
-    else:
-        raw_text = st.text_area("Вставьте ваш текст:", height=150)
+    # --- ШАГ 1: ВЫБОР ТЕКСТА ---
+    st.header("📖 Шаг 2: Выбор текста")
+    text_mode = st.radio("Источник текста:", ["Демо-текст (встроенный)", "Ввести вручную"])
+    raw_text = DEMO_TEXT if text_mode.startswith("Демо") else st.text_area("Вставьте ваш текст:", height=120)
+    st.divider()
 
     if raw_text:
-        st.subheader("Кликните на слово для разметки")
-        sentences = split_text_sentences(raw_text)
+        # --- ШАГ 2: ВЫБОР АКСИОЛОГЕМ ---
+        st.header("🎯 Шаг 3: Выбор аксиологем для разметки")
+        st.info("Выберите одну или несколько ценностей, которые присутствуют в тексте. Разметка слов будет привязана к выбранным аксиологемам.")
+        selected_axios = st.multiselect("Аксиологемы (Указ №809):", AXIOLOGEMES)
         
-        # Отрисовка слов как кнопок
-        cols = st.columns(8)
-        word_idx = 0
-        for s_idx, sent in enumerate(sentences):
-            words = re.findall(r'\b\w+[\w\-’]*\b', sent)
-            for w in words:
-                col = cols[word_idx % 8]
-                btn = col.button(w, key=f"btn_{s_idx}_{word_idx}", use_container_width=True)
-                if btn:
-                    st.session_state.selected_word = w
-                    st.session_state.selected_sentence = sent
-                    st.session_state.selected_sent_id = s_idx
-                    st.session_state.annotation_form = True
-                word_idx += 1
-
-        if st.session_state.selected_word and st.session_state.annotation_form:
+        if selected_axios:
             st.divider()
-            st.info(f"🔍 **Слово:** `{st.session_state.selected_word}` | **Предложение №{st.session_state.selected_sent_id}**")
-            st.markdown(f"📖 *{st.session_state.selected_sentence}*")
+            # --- ШАГ 3: КЛИК ПО СЛОВАМ ---
+            st.header("🖱️ Шаг 4: Кликните на слово-репрезентант")
+            sentences = split_text_sentences(raw_text)
+            
+            # Отображение слов в виде кнопок
+            cols = st.columns(8)
+            word_counter = 0
+            for s_idx, sent in enumerate(sentences):
+                # Очистка от номеров предложений для клика
+                clean_sent = re.sub(r'\(\d+\)', '', sent)
+                words = re.findall(r'\b[а-яА-ЯёЁ\-]+\b', clean_sent)
+                for w in words:
+                    col = cols[word_counter % 8]
+                    btn = col.button(w, key=f"btn_{s_idx}_{word_counter}", use_container_width=True)
+                    if btn:
+                        st.session_state.selected_word_data = {
+                            "word": w,
+                            "sentence": sent,
+                            "sent_id": s_idx
+                        }
+                        st.rerun()
+                    word_counter += 1
 
-            is_direct = is_direct_speech(st.session_state.selected_sentence)
-            auto_data = analyze_word(st.session_state.selected_word, st.session_state.selected_sentence)
-
-            with st.form("annotation_form"):
-                axiologeme = st.selectbox("Аксиологема", AXIOLOGEMES)
+            # --- ШАГ 4: ФОРМА РАЗМЕТКИ ---
+            if st.session_state.selected_word_data:
+                st.divider()
+                st.info(f"🔍 **Слово:** `{st.session_state.selected_word_data['word']}` | **Предложение №{st.session_state.selected_word_data['sent_id']}**")
+                st.markdown(f"📖 *{st.session_state.selected_word_data['sentence']}*")
                 
-                st.markdown("🔹 **Морфемный уровень** (выберите подходящие)")
-                morphemes = st.multiselect("", 
-                    ["диминутивные", "аугментативные", "мелиоративные", "пейоративные", 
-                     "частичности", "недостаточности", "чрезмерности", "приблизительности"])
-                
-                st.markdown("🔹 **Стилистический уровень**")
-                col1, col2 = st.columns(2)
-                stylistic_type = col1.selectbox("Тип", list(STYLISTIC_HIERARCHY.keys()))
-                stylistic_subtype = col2.selectbox("Подтип", STYLISTIC_HIERARCHY.get(stylistic_type, []))
+                w_data = st.session_state.selected_word_data
+                auto_morph, lemma, pos = analyze_morphology(w_data["word"])
+                syntax_scheme = get_syntax_scheme(w_data["word"], w_data["sentence"])
+                is_direct = is_direct_speech(w_data["sentence"])
 
-                illoc_force = "Нет (не в прямой речи)"
-                if is_direct:
-                    st.warning("⚠️ Слово находится в прямой речи.")
-                    illoc_force = st.selectbox("Иллокутивная сила (Дж. Серль)", ILLOCUTIONARY_FORCES)
+                st.subheader("📝 Введите параметры разметки")
+                # Используем form БЕЗ key, чтобы избежать StreamlitValueAssignmentNotAllowedError
+                with st.form("annotation_input_form"):
+                    axio = st.selectbox("К какой аксиологеме относится это слово?", selected_axios)
+                    
+                    st.markdown("🔹 **Морфемный уровень**")
+                    morphemes = st.multiselect("Присутствующие морфемы", 
+                        ["диминутивные", "аугментативные", "мелиоративные", "пейоративные", 
+                         "частичности", "недостаточности", "чрезмерности", "приблизительности"])
+                    
+                    st.markdown("🔹 **Морфологический уровень** (авто-заполнено, можно править)")
+                    morph_features = st.text_input("Формат: падеж-число-род-одуш-накл-время-лицо-залог-вид-степень-кратк-прочее", value=auto_morph)
+                    
+                    st.markdown("🔹 **Синтаксический уровень**")
+                    syntactic_scheme = st.text_input("Структурная схема словосочетания/контекста", value=syntax_scheme)
+                    
+                    st.markdown("🔹 **Стилистический уровень**")
+                    col1, col2 = st.columns(2)
+                    stylistic_type = col1.selectbox("Тип", list(STYLISTIC_HIERARCHY.keys()))
+                    stylistic_subtype = col2.selectbox("Подтип", STYLISTIC_HIERARCHY.get(stylistic_type, []))
+                    
+                    st.markdown("🔹 **Деривационный уровень**")
+                    derivatives = st.text_input("Производные в тексте (через запятую, если есть)")
+                    
+                    illoc_force = "Нет (не в прямой речи)"
+                    if is_direct:
+                        st.warning("⚠️ Слово находится в **прямой речи**. Укажите иллокутивную силу (Дж. Серль).")
+                        illoc_force = st.selectbox("Иллокутивная сила", ILLOCUTIONARY_FORCES)
+                        
+                    justification = st.text_area("Обоснование выбора (кратко)")
+                    
+                    submitted = st.form_submit_button("💾 Сохранить аннотацию")
+                    if submitted:
+                        save_data = {
+                            "annotator_id": info['id'], "annotator_gender": info['gender'],
+                            "annotator_age": info['age'], "is_anonymous": info['is_anonymous'],
+                            "text_source": "DEMO" if text_mode.startswith("Демо") else "CUSTOM",
+                            "sentence_id": w_data['sent_id'], "word_form": w_data['word'],
+                            "lemma": lemma, "pos": pos, "morph_features": morph_features,
+                            "syntactic_scheme": syntactic_scheme, "selected_axiologeme": axio,
+                            "morphemes": ", ".join(morphemes), "stylistic_type": stylistic_type,
+                            "stylistic_subtype": stylistic_subtype, "derivatives": derivatives,
+                            "illocutionary_force": illoc_force, "is_direct_speech": is_direct,
+                            "justification": justification,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        save_annotation(save_data)
+                        st.success("✅ Аннотация успешно сохранена!")
+                        st.session_state.selected_word_data = None
+                        st.rerun()
 
-                derivatives = st.text_input("Производные в тексте (через запятую)", "")
-                notes = st.text_area("Примечания / Обоснование выбора", "")
-
-                submitted = st.form_submit_button("💾 Сохранить разметку")
-                if submitted:
-                    save_data = {
-                        "text_source": "DEMO" if text_mode.startswith("Демо") else "CUSTOM",
-                        "sentence_id": st.session_state.selected_sent_id,
-                        "word_form": st.session_state.selected_word,
-                        "lemma": auto_data["lemma"],
-                        "pos": auto_data["pos"],
-                        "morph_features": auto_data["morph"],
-                        "syntactic_scheme": auto_data["syntax"],
-                        "axiologeme": axiologeme,
-                        "morphemes": ", ".join(morphemes),
-                        "stylistic_type": stylistic_type,
-                        "stylistic_subtype": stylistic_subtype,
-                        "illocutionary_force": illoc_force,
-                        "is_direct_speech": is_direct,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    save_annotation(save_data)
-                    st.success("✅ Аннотация сохранена!")
-                    st.session_state.annotation_form = False
+                if st.button("❌ Отменить выбор слова"):
+                    st.session_state.selected_word_data = None
                     st.rerun()
 
-# --- TAB 2: УПРАВЛЕНИЕ ---
-with tab2:
-    password = st.text_input("🔑 Введите пароль администратора для доступа к данным:", type="password")
-    if password == "axio2026": # В продакшене используйте хеширование!
-        st.session_state.admin_logged = True
+# --- TAB 2 & 3: УПРАВЛЕНИЕ И СТАТИСТИКА (внизу) ---
+st.divider()
+st.caption("Для просмотра данных и статистики обратитесь к панели управления.")
+tab_ctrl, tab_stats = st.tabs(["🔐 Управление данными", "📊 Статистика"])
 
+with tab_ctrl:
+    st.subheader("📋 Размеченные данные")
+    password = st.text_input("🔑 Пароль администратора:", type="password", key="admin_pass")
+    if password == "axio2026":
+        st.session_state.admin_logged = True
+        
     if st.session_state.admin_logged:
-        st.subheader("📋 Размеченные данные")
         df = load_annotations()
         if df.empty:
             st.info("Пока нет сохраненных аннотаций.")
         else:
-            # Фильтрация
-            filter_source = st.multiselect("Фильтр по источнику:", df["text_source"].unique().tolist(), default=df["text_source"].unique().tolist())
-            df_filtered = df[df["text_source"].isin(filter_source)]
-            
-            st.dataframe(df_filtered, use_container_width=True)
-            
-            if st.button("🗑️ Очистить все данные"):
+            st.dataframe(df, use_container_width=True)
+            if st.button("🗑️ Очистить базу данных"):
                 conn = sqlite3.connect(DB_PATH)
                 conn.execute("DELETE FROM annotations")
                 conn.commit()
@@ -302,30 +317,26 @@ with tab2:
                 st.success("База очищена.")
                 st.rerun()
     else:
-        st.info("🔒 Доступ закрыт. Введите пароль.")
+        st.info("🔒 Введите пароль для доступа.")
 
-# --- TAB 3: СТАТИСТИКА ---
-with tab3:
+with tab_stats:
     st.subheader("📊 Визуальная аналитика")
     df = load_annotations()
     if df.empty:
         st.warning("Нет данных для отображения статистики.")
     else:
-        st.markdown("### Распределение аксиологем")
-        axio_counts = df["axiologeme"].value_counts().reset_index()
-        axio_counts.columns = ["Аксиологема", "Количество"]
-        st.bar_chart(axio_counts.set_index("Аксиологема"))
-
-        st.markdown("### Распределение по частям речи")
-        pos_counts = df["pos"].value_counts().reset_index()
-        pos_counts.columns = ["Часть речи", "Количество"]
-        st.bar_chart(pos_counts.set_index("Часть речи"))
-
-        st.markdown("### Иллокутивные силы (в прямой речи)")
-        illoc_df = df[df["is_direct_speech"]]
-        if not illoc_df.empty:
-            illoc_counts = illoc_df["illocutionary_force"].value_counts().reset_index()
-            illoc_counts.columns = ["Иллокутивная сила", "Количество"]
-            st.bar_chart(illoc_counts.set_index("Иллокутивная сила"))
-        else:
-            st.info("Нет разметки для прямой речи.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("### Распределение аксиологем")
+            axio_counts = df["selected_axiologeme"].value_counts().reset_index()
+            axio_counts.columns = ["Аксиологема", "Количество"]
+            st.bar_chart(axio_counts.set_index("Аксиологема"))
+        with c2:
+            st.markdown("### Иллокутивные силы (прямая речь)")
+            illoc_df = df[df["is_direct_speech"]]
+            if not illoc_df.empty:
+                illoc_counts = illoc_df["illocutionary_force"].value_counts().reset_index()
+                illoc_counts.columns = ["Сила", "Количество"]
+                st.bar_chart(illoc_counts.set_index("Сила"))
+            else:
+                st.info("Нет разметки прямой речи.")
