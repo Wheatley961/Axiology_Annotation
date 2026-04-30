@@ -4,7 +4,7 @@ import stanza
 import sqlite3
 import re
 import os
-import pymorphy2
+import pymorphy3
 from datetime import datetime
 
 # ==========================================
@@ -120,11 +120,11 @@ def load_stanza():
         stanza.download('ru', verbose=False)
         return stanza.Pipeline('ru', processors='tokenize,pos,lemma,depparse', verbose=False)
     except Exception as e:
-        st.warning(f"⚠️ Stanza инициализация не прошла: {e}. Используется pymorphy2 (локально, быстро).")
+        st.warning(f"⚠️ Stanza инициализация не прошла: {e}. Используется pymorphy3 (локально, быстро).")
         return None
 
 def analyze_morphology(word):
-    morph = pymorphy2.MorphAnalyzer()
+    morph = pymorphy3.MorphAnalyzer()
     p = morph.parse(word)[0]
     # Формат: падеж-число-род-одушевленность-наклонение/форма-время-лицо-залог-вид-степень-краткость-прочее
     tags = {
@@ -137,7 +137,7 @@ def analyze_morphology(word):
     return "-".join(tags.values()), p.normal_form, p.tag.POS or "X"
 
 def get_syntax_scheme(word, sentence):
-    # Простой fallback на основе pymorphy2 + контекст
+    # Простой fallback на основе pymorphy3 + контекст
     return f"контекст_анализ_{word[:4]}"
 
 def is_direct_speech(sentence):
