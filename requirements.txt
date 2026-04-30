@@ -1,5 +1,4 @@
 streamlit>=1.30.0
-stanza>=1.7.0
 pandas>=2.1.0
 plotly>=5.18.0
 pymorphy3  # Fallback, если stanza не загрузится
