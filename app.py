@@ -18,14 +18,14 @@ AXIOLOGEMES = [
 ]
 
 STYLISTIC_HIERARCHY = {
-    "Фонетические": ["ассонанс", "аллитерация", "звукоподражание"],
-    "Синтаксические": ["анафора", "эпифора", "антитеза", "градация", "инверсия", "параллелизм",
-                       "хиазм", "эллипсис", "умолчание", "риторический вопрос", "риторическое восклицание",
-                       "риторическое обращение", "многосоюзие", "бессоюзие", "парцелляция",
-                       "синтаксический повтор", "присоединительные конструкции", "именительный темы", "сегментация"],
-    "Тропы": ["метафора", "метонимия", "синекдоха", "эпитет", "сравнение", "олицетворение",
-              "гипербола", "литота", "ирония", "сарказм", "перифраз", "аллегория", "символ",
-              "оксюморон", "эвфемизм", "дисфемизм"]
+    "Фонетические средства": ["ассонанс", "аллитерация", "звукоподражание"],
+    "Синтаксические средства": ["анафора", "эпифора", "антитеза", "градация", "инверсия", "параллелизм",
+                                "хиазм", "эллипсис", "умолчание", "риторический вопрос", "риторическое восклицание",
+                                "риторическое обращение", "многосоюзие", "бессоюзие", "парцелляция",
+                                "синтаксический повтор", "присоединительные конструкции", "именительный темы", "сегментация"],
+    "Собственно тропы": ["метафора", "метонимия", "синекдоха", "эпитет", "сравнение", "олицетворение",
+                         "гипербола", "литота", "ирония", "сарказм", "перифраз", "аллегория", "символ",
+                         "оксюморон", "эвфемизм", "дисфемизм"]
 }
 
 ILLOCUTIONARY_FORCES = ["репрезентативы", "директивы", "комиссивы", "экспрессивы", "декларации"]
@@ -67,8 +67,6 @@ def init_db():
     c = conn.cursor()
     cols_def = "id INTEGER PRIMARY KEY AUTOINCREMENT, " + ", ".join([f"{k} {v}" for k, v in EXPECTED_SCHEMA.items()])
     c.execute(f"CREATE TABLE IF NOT EXISTS annotations ({cols_def})")
-    
-    # Автоматическое добавление новых столбцов при обновлении кода
     c.execute("PRAGMA table_info(annotations)")
     existing_cols = {row[1] for row in c.fetchall()}
     for col, col_type in EXPECTED_SCHEMA.items():
@@ -148,7 +146,7 @@ if 'axio_counts' not in st.session_state: st.session_state.axio_counts = default
 st.header("👤 Шаг 0: Данные о разметчике")
 if not st.session_state.annotator_confirmed:
     with st.form("annotator_form"):
-        st.info("Для научной достоверности укажите возраст и пол. Данные могут быть скрыты при экспорте.")
+        st.info("Для научной достоверности укажите возраст и пол. Данные сохраняются в базе.")
         annot_id = st.text_input("ID / Логин (опционально)")
         gender = st.selectbox("Пол", ["М", "Ж", "Не указан"])
         age = st.number_input("Возраст", min_value=14, max_value=100, value=20)
@@ -213,7 +211,7 @@ else:
                             st.rerun()
                     wc += 1
 
-            # --- ШАГ 4: ФОРМА РАЗМЕТКИ ---
+            # --- ШАГ 4: ФОРМА РАЗМЕТКИ С ЗАВИСИМЫМИ ВЫПАДАЮЩИМИ СПИСКАМИ ---
             if st.session_state.selected_word_data:
                 st.divider()
                 wd = st.session_state.selected_word_data
@@ -225,24 +223,40 @@ else:
 
                 st.subheader("📝 Параметры разметки")
                 with st.form("annotation_form"):
-                    axio = st.selectbox("Аксиологема:", selected_axios)
-                    morphemes = st.multiselect("Морфемы:", ["диминутивные", "аугментативные", "мелиоративные", "пейоративные", "частичности", "недостаточности", "чрезмерности", "приблизительности"])
-                    morph_features = st.text_input("Морфология (авто):", value=auto_morph)
-                    syntactic_scheme = st.text_input("Синтаксис (структурная схема):", value="X")
+                    axio = st.selectbox("Аксиологема:", selected_axios, key=f"axio_{wd['word']}")
+                    morphemes = st.multiselect("Морфемы:", ["диминутивные", "аугментативные", "мелиоративные", "пейоративные", "частичности", "недостаточности", "чрезмерности", "приблизительность"])
+                    morph_features = st.text_input("Морфология (авто):", value=auto_morph, key=f"morph_{wd['word']}")
+                    syntactic_scheme = st.text_input("Синтаксис (структурная схема):", value="X", key=f"syn_{wd['word']}")
+                    
+                    # ЗАВИСИМЫЕ ВЫПАДАЮЩИЕ СПИСКИ ДЛЯ СТИЛИСТИКИ
+                    st.markdown("🔹 **Стилистический уровень**")
                     c1, c2 = st.columns(2)
-                    stylistic_type = c1.selectbox("Стилистика (Тип):", list(STYLISTIC_HIERARCHY.keys()))
-                    stylistic_subtype = c2.selectbox("Стилистика (Подтип):", STYLISTIC_HIERARCHY.get(stylistic_type, []))
-                    derivatives = st.text_input("Производные в тексте:")
+                    with c1:
+                        stylistic_type = st.selectbox(
+                            "Тип средства:", 
+                            options=list(STYLISTIC_HIERARCHY.keys()), 
+                            key=f"st_type_{wd['word']}"
+                        )
+                    with c2:
+                        # Автоматически меняет список в зависимости от выбранного типа
+                        subtypes = STYLISTIC_HIERARCHY.get(stylistic_type, [])
+                        stylistic_subtype = st.selectbox(
+                            "Подтип / Конкретное средство:", 
+                            options=subtypes, 
+                            key=f"st_sub_{wd['word']}"
+                        )
+                        
+                    derivatives = st.text_input("Производные в тексте:", key=f"deriv_{wd['word']}")
                     
                     illoc_force = "Нет (не в прямой речи)"
                     sentence_context = None
                     if is_direct:
                         st.warning("⚠️ Слово в **прямой речи**. Укажите иллокутивную силу (предложение будет сохранено).")
-                        illoc_force = st.selectbox("Иллокутивная сила (Дж. Серль):", ILLOCUTIONARY_FORCES)
+                        illoc_force = st.selectbox("Иллокутивная сила (Дж. Серль):", ILLOCUTIONARY_FORCES, key=f"illoc_{wd['word']}")
                         sentence_context = wd["sentence"]
-                        st.text_area("Контекст предложения:", value=sentence_context, disabled=True)
+                        st.text_area("Контекст предложения:", value=sentence_context, disabled=True, key=f"ctx_{wd['word']}")
                         
-                    justification = st.text_area("Обоснование выбора:")
+                    justification = st.text_area("Обоснование выбора:", key=f"just_{wd['word']}")
                     
                     if st.form_submit_button("💾 Сохранить аннотацию"):
                         data = {k: None for k in EXPECTED_SCHEMA.keys()}
