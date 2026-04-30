@@ -6,13 +6,24 @@ import stanza
 st.set_page_config(layout="wide")
 
 # -------------------------
-# INIT STANZA
+# FIXED STANZA INIT
 # -------------------------
 @st.cache_resource
 
 def load_nlp():
-    stanza.download('ru')
-    return stanza.Pipeline('ru', processors='tokenize,mwt,pos,lemma,depparse')
+    try:
+        return stanza.Pipeline(
+            lang='ru',
+            processors='tokenize,pos,lemma,depparse',
+            use_gpu=False
+        )
+    except:
+        stanza.download('ru')
+        return stanza.Pipeline(
+            lang='ru',
+            processors='tokenize,pos,lemma,depparse',
+            use_gpu=False
+        )
 
 nlp = load_nlp()
 
@@ -22,7 +33,7 @@ nlp = load_nlp()
 PASSWORD = "admin123"
 
 # -------------------------
-# DEMO TEXT (FULL)
+# FULL DEMO TEXT
 # -------------------------
 demo_text = """(1)В один прекрасный день мы – пять девочек – карабкаемся на Замковую гору. (2)В руках у нас большие пёстрые букеты разноцветных опавших листьев – больше всего кленовых.
 (3)Вдруг из-за обломков стены слышен мужской голос, глубокий, странно-певучий, полный страстного чувства.
@@ -40,13 +51,9 @@ demo_text = """(1)В один прекрасный день мы – пять д
 – С-с-п-п-пасибо!
 (25)И, неловко поклонившись, он быстро уходит, прижимая к груди наши смешные букеты из листьев. (26)Вот его шинель мелькнула в густой щётке кустов калины, вот он уже спускается с горы – исчез из виду.
 (27)Теперь я знаю: юноша в затасканной ученической шинели был Илларион Певцов. (28)Он был тяжёлый и, как все считали, неизлечимый заика. (29)А он мечтал стать актёром! (30)И у него в самом деле был талант! (31)Он уходил за город, в лес, взбирался на горы; там он декламировал, читал монологи, отрывки из пьес. (32)Над ним насмехались, считали его полоумным. (33)Но он превозмог непреодолимое, он сделал невозможное: через пятнадцать – двадцать лет после этой нашей встречи с ним на Замковой горе он стал одним из самых замечательных русских актёров. (34)Бывали и у него срывы, полосы, когда он не мог играть, потому что лишался силы управлять своей речью и побеждать её недостаток. (35)И всё же он не отчаивался, у него не опускались руки!
-(36)Когда я думаю о людях сильной воли, сильной страсти к искусству, я всегда вспоминаю его – чудесного актёра Иллариона Певцова. (37)И мне приятно думать, что наши смешные попугайно-пёстрые букеты из осенних листьев были, может статься, первыми цветами, поднесёнными ему на трудном, но победном пути.
-"""
+(36)Когда я думаю о людях сильной воли, сильной страсти к искусству, я всегда вспоминаю его – чудесного актёра Иллариона Певцова. (37)И мне приятно думать, что наши смешные попугайно-пёстрые букеты из осенних листьев были, может статься, первыми цветами, поднесёнными ему на трудном, но победном пути."""
 
-# -------------------------
-# AXIOLOGIES (FULL LIST)
-# -------------------------
-AXIOLOGIES = [
+AXIOLOGIES = AXIOLOGIES = [
 "жизнь",
 "достоинство",
 "права и свободы человека",
@@ -65,20 +72,7 @@ AXIOLOGIES = [
 "историческая память и преемственность поколений",
 "единство (народов России)"
 ]
-
-ILLOCUTION = [
-"репрезентатив",
-"директив",
-"комиссив",
-"экспрессив",
-"декларация"
-]
-
-STYLISTIC = {
-"фонетические": ["ассонанс","аллитерация","звукоподражание"],
-"синтаксические": ["анафора","эпифора","антитеза","градация","инверсия","параллелизм","хиазм","эллипсис","умолчание","риторический вопрос","риторическое восклицание","риторическое обращение","многосоюзие","бессоюзие","парцелляция","синтаксический повтор","присоединительные конструкции","именительный темы","сегментация"],
-"тропы": ["метафора","метонимия","синекдоха","эпитет","сравнение","олицетворение","гипербола","литота","ирония","сарказм","перифраз","аллегория","символ","оксюморон","эвфемизм","дисфемизм"]
-}
+ILLOCUTION = ["репрезентатив","директив","комиссив","экспрессив","декларация"]
 
 # -------------------------
 # SESSION
@@ -90,84 +84,63 @@ if "selected" not in st.session_state:
     st.session_state.selected = None
 
 # -------------------------
-# TEXT INPUT
+# TEXT
 # -------------------------
 mode = st.sidebar.radio("Источник", ["Демо", "Ввод"])
-
 text = demo_text if mode == "Демо" else st.sidebar.text_area("Введите текст")
 
+if not text:
+    st.stop()
+
 # -------------------------
-# NLP PROCESS
+# NLP
 # -------------------------
 doc = nlp(text)
 
 words = []
-sent_map = {}
+word_sentence_map = {}
 
-for sent_id, sent in enumerate(doc.sentences):
+for sent in doc.sentences:
     for w in sent.words:
         words.append(w)
-        sent_map[w.id, sent_id] = sent.text
+        word_sentence_map[w.id] = sent.text
 
 # -------------------------
-# UI
+# UI WORDS
 # -------------------------
-st.title("🧠 Разметка текста")
+st.title("Разметка текста")
 
 cols = st.columns(10)
 for i, w in enumerate(words):
-    label = f"{w.text}"
-    if cols[i % 10].button(label):
+    if cols[i % 10].button(w.text):
         st.session_state.selected = w
 
 # -------------------------
-# SELECTED WORD PANEL
+# PANEL
 # -------------------------
 if st.session_state.selected:
     w = st.session_state.selected
+    sentence = word_sentence_map.get(w.id, "")
 
-    # find sentence
-    sentence_text = ""
-    for sent in doc.sentences:
-        if any(sw.id == w.id for sw in sent.words):
-            sentence_text = sent.text
+    st.subheader("Слово")
+    st.write(w.text)
+    st.write("Лемма:", w.lemma)
+    st.write("POS:", w.upos)
+    st.write("Граммемы:", w.feats)
+    st.write("Предложение:", sentence)
 
-    st.subheader("Выбранное слово")
-    st.write(f"Слово: {w.text}")
-    st.write(f"Лемма: {w.lemma}")
-    st.write(f"POS: {w.upos}")
-    st.write(f"Граммемы: {w.feats}")
-    st.write(f"Предложение: {sentence_text}")
-
-    # AXIOLOGY
     ax = st.multiselect("Аксиологемы", AXIOLOGIES)
 
-    # STYLISTIC
-    st.subheader("Стилистика")
-    stylistic_selected = []
-    for k, vals in STYLISTIC.items():
-        st.write(k)
-        sel = st.multiselect(k, vals)
-        stylistic_selected.extend(sel)
+    ill = st.selectbox("Иллокутивная сила", ["-"] + ILLOCUTION)
 
-    # ILLOCUTION
-    st.subheader("Иллокутивная сила (если прямая речь)")
-    ill = st.selectbox("Тип", ["-"] + ILLOCUTION)
-
-    # AUTO SYNTAX SCHEME (simple)
-    st.subheader("Синтаксическая схема (авто)")
-    deps = [f"{w.text}-{w.deprel}" for w in doc.sentences[0].words]
-    st.write(" ".join(deps))
-
-    if st.button("Сохранить разметку"):
+    if st.button("Сохранить"):
         st.session_state.annotations.append({
             "word": w.text,
             "lemma": w.lemma,
             "pos": w.upos,
             "feats": w.feats,
-            "sentence": sentence_text,
+            "sentence": sentence,
             "axiology": ",".join(ax),
-            "stylistic": ",".join(stylistic_selected),
             "illocution": ill
         })
         st.success("Сохранено")
@@ -175,13 +148,16 @@ if st.session_state.selected:
 # -------------------------
 # TABLE
 # -------------------------
-st.subheader("📊 Таблица")
-
 df = pd.DataFrame(st.session_state.annotations)
+
 if not df.empty:
     st.dataframe(df, use_container_width=True)
 
-    password = st.text_input("Пароль для удаления", type="password")
+    # aggregation by sentence for illocution
+    st.subheader("Иллокутивные силы по предложениям")
+    st.write(df.groupby("sentence")["illocution"].apply(list))
+
+    password = st.text_input("Пароль", type="password")
     if password == PASSWORD:
         idx = st.number_input("ID", 0, len(df)-1)
         if st.button("Удалить"):
