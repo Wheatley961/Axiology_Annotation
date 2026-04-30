@@ -49,7 +49,7 @@ DEMO_TEXT = """(1)В один прекрасный день мы – пять д
 (36)Когда я думаю о людях сильной воли, сильной страсти к искусству, я всегда вспоминаю его – чудесного актёра Иллариона Певцова. (37)И мне приятно думать, что наши смешные попугайно-пёстрые букеты из осенних листьев были, может статься, первыми цветами, поднесёнными ему на трудном, но победном пути."""
 
 # ==========================================
-# 2. БАЗА ДАННЫХ И МИГРАЦИЯ
+# 2. БАЗА ДАННЫХ И АВТОМИГРАЦИЯ
 # ==========================================
 DB_PATH = "axiology_annotations.db"
 EXPECTED_SCHEMA = {
@@ -65,11 +65,10 @@ EXPECTED_SCHEMA = {
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Создаём таблицу, если её нет
     cols_def = "id INTEGER PRIMARY KEY AUTOINCREMENT, " + ", ".join([f"{k} {v}" for k, v in EXPECTED_SCHEMA.items()])
     c.execute(f"CREATE TABLE IF NOT EXISTS annotations ({cols_def})")
     
-    # Миграция: добавляем недостающие столбцы в старых БД
+    # Автоматическое добавление новых столбцов при обновлении кода
     c.execute("PRAGMA table_info(annotations)")
     existing_cols = {row[1] for row in c.fetchall()}
     for col, col_type in EXPECTED_SCHEMA.items():
@@ -84,7 +83,7 @@ def save_annotation(data):
     try:
         cols = ", ".join(EXPECTED_SCHEMA.keys())
         placeholders = ", ".join(["?"] * len(EXPECTED_SCHEMA))
-        vals = [data[k] for k in EXPECTED_SCHEMA.keys()]
+        vals = [data.get(k, None) for k in EXPECTED_SCHEMA.keys()]
         c.execute(f"INSERT INTO annotations ({cols}) VALUES ({placeholders})", vals)
         conn.commit()
         return True
@@ -101,7 +100,6 @@ def load_annotations():
     except Exception:
         df = pd.DataFrame()
     conn.close()
-    # Гарантируем наличие всех столбцов в DataFrame
     for col in EXPECTED_SCHEMA.keys():
         if col not in df.columns:
             df[col] = None
@@ -110,7 +108,7 @@ def load_annotations():
 init_db()
 
 # ==========================================
-# 3. NLP МОДУЛЬ
+# 3. NLP МОДУЛЬ (pymorphy3)
 # ==========================================
 morph = pymorphy3.MorphAnalyzer()
 
@@ -211,8 +209,8 @@ else:
                             st.rerun()
                     wc += 1
 
-            # --- ШАГ 4: ФОРМА РАЗМЕТКИ ---
-            if st.session_state.selected_word_
+            # --- ШАГ 4: ФОРМА РАЗМЕТКИ (ИСПРАВЛЕНО) ---
+            if st.session_state.selected_word_data:
                 st.divider()
                 wd = st.session_state.selected_word_data
                 st.info(f"🔍 **Слово:** `{wd['word']}` | **Предложение №{wd['sent_id']}**")
@@ -262,7 +260,9 @@ else:
                             st.session_state.selected_word_data = None
                             st.rerun()
 
-                if st.button("❌ Отменить выбор слова"): st.session_state.selected_word_data = None; st.rerun()
+                if st.button("❌ Отменить выбор слова"): 
+                    st.session_state.selected_word_data = None
+                    st.rerun()
 
 # ==========================================
 # 5. ПАНЕЛИ УПРАВЛЕНИЯ И СТАТИСТИКИ
@@ -309,20 +309,17 @@ with tab_stats:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("### Распределение аксиологем")
-            col_axio = 'selected_axiologeme'
-            if col_axio in df.columns and df[col_axio].notna().any():
-                axio_counts = df[col_axio].value_counts().reset_index()
+            if 'selected_axiologeme' in df.columns and df['selected_axiologeme'].notna().any():
+                axio_counts = df['selected_axiologeme'].value_counts().reset_index()
                 axio_counts.columns = ["Аксиологема", "Количество"]
                 st.bar_chart(axio_counts.set_index("Аксиологема"))
             else: st.info("Нет данных по аксиологемам.")
         with c2:
             st.markdown("### Иллокутивные силы (прямая речь)")
-            col_dir = 'is_direct_speech'
-            col_illoc = 'illocutionary_force'
-            if col_dir in df.columns and col_illoc in df.columns:
-                illoc_df = df[df[col_dir].astype(bool)]
-                if not illoc_df.empty and illoc_df[col_illoc].notna().any():
-                    illoc_counts = illoc_df[col_illoc].value_counts().reset_index()
+            if 'is_direct_speech' in df.columns and 'illocutionary_force' in df.columns:
+                illoc_df = df[df['is_direct_speech'].astype(bool)]
+                if not illoc_df.empty and illoc_df['illocutionary_force'].notna().any():
+                    illoc_counts = illoc_df['illocutionary_force'].value_counts().reset_index()
                     illoc_counts.columns = ["Сила", "Количество"]
                     st.bar_chart(illoc_counts.set_index("Сила"))
                 else: st.info("Нет разметки прямой речи.")
