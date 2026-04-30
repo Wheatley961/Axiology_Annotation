@@ -220,38 +220,57 @@ else:
                 
                 auto_morph, lemma, pos = analyze_morphology(wd["word"])
                 is_direct = is_direct_speech(wd["sentence"])
-
+                
+                # Инициализация session_state для стилистики
+                if 'sty_type' not in st.session_state:
+                    st.session_state.sty_type = list(STYLISTIC_HIERARCHY.keys())[0]
+                if 'sty_sub' not in st.session_state:
+                    st.session_state.sty_sub = STYLISTIC_HIERARCHY[st.session_state.sty_type][0]
+            
                 st.subheader("📝 Параметры разметки")
+                
+                # СТИЛИСТИКА ВЫНОСИТСЯ ИЗ ФОРМЫ для динамического обновления
+                st.markdown("🔹 **Стилистический уровень**")
+                c1, c2 = st.columns(2)
+                with c1:
+                    sty_type = st.selectbox(
+                        "Тип средства:", 
+                        options=list(STYLISTIC_HIERARCHY.keys()), 
+                        index=list(STYLISTIC_HIERARCHY.keys()).index(st.session_state.sty_type),
+                        key="sty_type_selector"
+                    )
+                
+                # Обновляем session_state при изменении типа
+                if sty_type != st.session_state.sty_type:
+                    st.session_state.sty_type = sty_type
+                    st.session_state.sty_sub = STYLISTIC_HIERARCHY[sty_type][0]
+                
+                with c2:
+                    subtypes = STYLISTIC_HIERARCHY.get(sty_type, [])
+                    sty_sub = st.selectbox(
+                        "Подтип / Конкретное средство:", 
+                        options=subtypes,
+                        index=subtypes.index(st.session_state.sty_sub) if st.session_state.sty_sub in subtypes else 0,
+                        key="sty_sub_selector"
+                    )
+                    st.session_state.sty_sub = sty_sub
+                
+                # ОСНОВНАЯ ФОРМА
                 with st.form("annotation_form"):
                     axio = st.selectbox("Аксиологема:", selected_axios, key=f"axio_{wd['word']}")
                     morphemes = st.multiselect("Морфемы:", ["диминутивные", "аугментативные", "мелиоративные", "пейоративные", "частичности", "недостаточности", "чрезмерности", "приблизительность"])
                     morph_features = st.text_input("Морфология (авто):", value=auto_morph, key=f"morph_{wd['word']}")
                     syntactic_scheme = st.text_input("Синтаксис (структурная схема):", value="X", key=f"syn_{wd['word']}")
                     
-                    # ЗАВИСИМЫЕ ВЫПАДАЮЩИЕ СПИСКИ ДЛЯ СТИЛИСТИКИ
-                    st.markdown("🔹 **Стилистический уровень**")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        stylistic_type = st.selectbox(
-                            "Тип средства:", 
-                            options=list(STYLISTIC_HIERARCHY.keys()), 
-                            key=f"st_type_{wd['word']}"
-                        )
-                    with c2:
-                        # Автоматически меняет список в зависимости от выбранного типа
-                        subtypes = STYLISTIC_HIERARCHY.get(stylistic_type, [])
-                        stylistic_subtype = st.selectbox(
-                            "Подтип / Конкретное средство:", 
-                            options=subtypes, 
-                            key=f"st_sub_{wd['word']}"
-                        )
-                        
+                    # Используем значения из session_state
+                    st.info(f"✅ Выбрано: **{sty_type}** → **{sty_sub}**")
+                    
                     derivatives = st.text_input("Производные в тексте:", key=f"deriv_{wd['word']}")
                     
                     illoc_force = "Нет (не в прямой речи)"
                     sentence_context = None
                     if is_direct:
-                        st.warning("⚠️ Слово в **прямой речи**. Укажите иллокутивную силу (предложение будет сохранено).")
+                        st.warning("⚠️ Слово в **прямой речи**. Укажите иллокутивную силу.")
                         illoc_force = st.selectbox("Иллокутивная сила (Дж. Серль):", ILLOCUTIONARY_FORCES, key=f"illoc_{wd['word']}")
                         sentence_context = wd["sentence"]
                         st.text_area("Контекст предложения:", value=sentence_context, disabled=True, key=f"ctx_{wd['word']}")
@@ -264,25 +283,31 @@ else:
                             "annotator_id": info['id'], "annotator_gender": info['gender'],
                             "annotator_age": info['age'], "is_anonymous": info['is_anonymous'],
                             "text_source": "DEMO" if text_mode.startswith("Демо") else "CUSTOM",
-                            "source_text": raw_text, # Сохраняем полный текст
+                            "source_text": raw_text,
                             "sentence_id": wd['sent_id'], "word_form": wd['word'], "lemma": lemma, "pos": pos,
                             "morph_features": morph_features, "syntactic_scheme": syntactic_scheme,
                             "selected_axiologeme": axio, "morphemes": ", ".join(morphemes),
-                            "stylistic_type": stylistic_type, "stylistic_subtype": stylistic_subtype,
+                            "stylistic_type": sty_type,          # Используем внешнюю переменную
+                            "stylistic_subtype": sty_sub,        # Используем внешнюю переменную
                             "derivatives": derivatives, "illocutionary_force": illoc_force,
                             "is_direct_speech": is_direct, "sentence_context": sentence_context,
                             "justification": justification, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         })
                         if save_annotation(data):
                             st.session_state.axio_counts[axio] = st.session_state.axio_counts.get(axio, 0) + 1
+                            # Сброс стилистики для следующего слова
+                            st.session_state.sty_type = list(STYLISTIC_HIERARCHY.keys())[0]
+                            st.session_state.sty_sub = STYLISTIC_HIERARCHY[st.session_state.sty_type][0]
                             st.success("✅ Аннотация сохранена!")
                             st.session_state.selected_word_data = None
                             st.rerun()
-
+            
                 if st.button("❌ Отменить выбор слова"): 
                     st.session_state.selected_word_data = None
+                    # Сброс стилистики
+                    st.session_state.sty_type = list(STYLISTIC_HIERARCHY.keys())[0]
+                    st.session_state.sty_sub = STYLISTIC_HIERARCHY[st.session_state.sty_type][0]
                     st.rerun()
-
 # ==========================================
 # 5. ПАНЕЛИ УПРАВЛЕНИЯ И СТАТИСТИКИ
 # ==========================================
