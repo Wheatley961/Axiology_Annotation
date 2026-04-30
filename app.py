@@ -54,11 +54,11 @@ DEMO_TEXT = """(1)В один прекрасный день мы – пять д
 DB_PATH = "axiology_annotations.db"
 EXPECTED_SCHEMA = {
     'annotator_id': 'TEXT', 'annotator_gender': 'TEXT', 'annotator_age': 'INTEGER',
-    'is_anonymous': 'BOOLEAN', 'text_source': 'TEXT', 'sentence_id': 'INTEGER',
-    'word_form': 'TEXT', 'lemma': 'TEXT', 'pos': 'TEXT', 'morph_features': 'TEXT',
-    'syntactic_scheme': 'TEXT', 'selected_axiologeme': 'TEXT', 'morphemes': 'TEXT',
-    'stylistic_type': 'TEXT', 'stylistic_subtype': 'TEXT', 'derivatives': 'TEXT',
-    'illocutionary_force': 'TEXT', 'is_direct_speech': 'BOOLEAN',
+    'is_anonymous': 'BOOLEAN', 'text_source': 'TEXT', 'source_text': 'TEXT',
+    'sentence_id': 'INTEGER', 'word_form': 'TEXT', 'lemma': 'TEXT', 'pos': 'TEXT',
+    'morph_features': 'TEXT', 'syntactic_scheme': 'TEXT', 'selected_axiologeme': 'TEXT',
+    'morphemes': 'TEXT', 'stylistic_type': 'TEXT', 'stylistic_subtype': 'TEXT',
+    'derivatives': 'TEXT', 'illocutionary_force': 'TEXT', 'is_direct_speech': 'BOOLEAN',
     'sentence_context': 'TEXT', 'justification': 'TEXT', 'timestamp': 'TEXT'
 }
 
@@ -144,19 +144,23 @@ if 'selected_word_data' not in st.session_state: st.session_state.selected_word_
 if 'admin_logged' not in st.session_state: st.session_state.admin_logged = False
 if 'axio_counts' not in st.session_state: st.session_state.axio_counts = defaultdict(int)
 
-# --- ШАГ 0: ИНФОРМАЦИЯ О РАЗМЕТЧИКЕ ---
-st.header("👤 Шаг 1: Информация о разметчике")
+# --- ШАГ 0: ДАННЫЕ О РАЗМЕТЧИКЕ (ОБЯЗАТЕЛЬНО) ---
+st.header("👤 Шаг 0: Данные о разметчике")
 if not st.session_state.annotator_confirmed:
     with st.form("annotator_form"):
-        is_anon = st.checkbox("Анонимная разметка", value=True)
-        if not is_anon:
-            c1, c2 = st.columns(2)
-            annot_id = c1.text_input("ID / Логин")
-            gender = c2.selectbox("Пол", ["М", "Ж", "Не указан"])
-            age = st.number_input("Возраст", min_value=16, max_value=100, value=25)
-        else: annot_id, gender, age = "anon", "X", 0
+        st.info("Для научной достоверности укажите возраст и пол. Данные могут быть скрыты при экспорте.")
+        annot_id = st.text_input("ID / Логин (опционально)")
+        gender = st.selectbox("Пол", ["М", "Ж", "Не указан"])
+        age = st.number_input("Возраст", min_value=14, max_value=100, value=20)
+        is_anon = st.checkbox("Скрыть ID в итоговой таблице (анонимная выгрузка)")
+        
         if st.form_submit_button("✅ Подтвердить и начать"):
-            st.session_state.annotator_info = {"id": annot_id, "gender": gender, "age": age, "is_anonymous": is_anon}
+            st.session_state.annotator_info = {
+                "id": "anon" if is_anon else (annot_id.strip() or "user"),
+                "gender": gender,
+                "age": int(age),
+                "is_anonymous": is_anon
+            }
             st.session_state.annotator_confirmed = True
             st.rerun()
 else:
@@ -165,7 +169,7 @@ else:
     st.divider()
 
     # --- ШАГ 1: ВЫБОР ТЕКСТА И ПРОСМОТР ---
-    st.header("📖 Шаг 2: Выбор и чтение текста")
+    st.header("📖 Шаг 1: Выбор и чтение текста")
     text_mode = st.radio("Источник текста:", ["Демо-текст (встроенный)", "Ввести вручную"])
     raw_text = DEMO_TEXT if text_mode.startswith("Демо") else st.text_area("Вставьте ваш текст:", height=100)
     
@@ -176,7 +180,7 @@ else:
 
     if raw_text:
         # --- ШАГ 2: ВЫБОР АКСИОЛОГЕМ ---
-        st.header("🎯 Шаг 3: Выбор аксиологем")
+        st.header("🎯 Шаг 2: Выбор аксиологем")
         st.info("Выберите ценности. На каждую аксиологему допускается **не более 5 слов-репрезентантов**.")
         selected_axios = st.multiselect("Аксиологемы (Указ №809):", AXIOLOGEMES)
         
@@ -189,7 +193,7 @@ else:
         if selected_axios:
             st.divider()
             # --- ШАГ 3: КЛИК ПО СЛОВАМ ---
-            st.header("🖱️ Шаг 4: Кликните на слово-репрезентант")
+            st.header("🖱️ Шаг 3: Кликните на слово-репрезентант")
             sentences = split_text_sentences(raw_text)
             cols = st.columns(8)
             wc = 0
@@ -209,7 +213,7 @@ else:
                             st.rerun()
                     wc += 1
 
-            # --- ШАГ 4: ФОРМА РАЗМЕТКИ (ИСПРАВЛЕНО) ---
+            # --- ШАГ 4: ФОРМА РАЗМЕТКИ ---
             if st.session_state.selected_word_data:
                 st.divider()
                 wd = st.session_state.selected_word_data
@@ -246,6 +250,7 @@ else:
                             "annotator_id": info['id'], "annotator_gender": info['gender'],
                             "annotator_age": info['age'], "is_anonymous": info['is_anonymous'],
                             "text_source": "DEMO" if text_mode.startswith("Демо") else "CUSTOM",
+                            "source_text": raw_text, # Сохраняем полный текст
                             "sentence_id": wd['sent_id'], "word_form": wd['word'], "lemma": lemma, "pos": pos,
                             "morph_features": morph_features, "syntactic_scheme": syntactic_scheme,
                             "selected_axiologeme": axio, "morphemes": ", ".join(morphemes),
