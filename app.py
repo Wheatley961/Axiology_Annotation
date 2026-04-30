@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import re
-import os
 import pymorphy3
 from datetime import datetime
 from collections import defaultdict
@@ -50,17 +49,14 @@ DEMO_TEXT = """(1)В один прекрасный день мы – пять д
 (36)Когда я думаю о людях сильной воли, сильной страсти к искусству, я всегда вспоминаю его – чудесного актёра Иллариона Певцова. (37)И мне приятно думать, что наши смешные попугайно-пёстрые букеты из осенних листьев были, может статься, первыми цветами, поднесёнными ему на трудном, но победном пути."""
 
 # ==========================================
-# 2. БАЗА ДАННЫХ (Безопасная инициализация)
+# 2. БАЗА ДАННЫХ
 # ==========================================
 DB_PATH = "axiology_annotations.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Полная схема. DROP TABLE IF EXISTS гарантирует совместимость при обновлении кода.
-    # В продакшене лучше использовать миграции, но для разметки это надежнее.
-    c.execute("DROP TABLE IF EXISTS annotations")
-    c.execute('''CREATE TABLE annotations (
+    c.execute('''CREATE TABLE IF NOT EXISTS annotations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         annotator_id TEXT, annotator_gender TEXT, annotator_age INTEGER, is_anonymous BOOLEAN,
         text_source TEXT, sentence_id INTEGER, word_form TEXT, lemma TEXT, pos TEXT,
@@ -216,8 +212,8 @@ else:
                             st.rerun()
                     word_counter += 1
 
-            # --- ШАГ 4: ФОРМА РАЗМЕТКИ ---
-            if st.session_state.selected_word_
+            # --- ШАГ 4: ФОРМА РАЗМЕТКИ (ИСПРАВЛЕНО) ---
+            if st.session_state.selected_word_data:
                 st.divider()
                 st.info(f"🔍 **Слово:** `{st.session_state.selected_word_data['word']}` | **Предложение №{st.session_state.selected_word_data['sent_id']}**")
                 st.markdown(f"📖 *{st.session_state.selected_word_data['sentence']}*")
@@ -302,18 +298,17 @@ with tab_ctrl:
             
             st.divider()
             st.subheader("✏️ Редактирование и удаление")
-            edited_df = st.data_editor(df, num_rows="fixed", use_container_width=True, hide_index=True)
+            edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, hide_index=True, key="data_editor")
             
             if st.button("💾 Применить изменения"):
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
-                # Удаляем всё и перезаписываем (безопасно для небольших таблиц)
                 cursor.execute("DELETE FROM annotations")
                 for _, row in edited_df.iterrows():
-                    cols = list(edited_df.columns[1:]) # без id
-                    vals = [row[c] for c in cols]
+                    cols_list = [c for c in edited_df.columns if c != 'id']
+                    vals = [row[c] for c in cols_list]
                     placeholders = ", ".join(["?"] * len(vals))
-                    cursor.execute(f"INSERT INTO annotations ({', '.join(cols)}) VALUES ({placeholders})", vals)
+                    cursor.execute(f"INSERT INTO annotations ({', '.join(cols_list)}) VALUES ({placeholders})", vals)
                 conn.commit()
                 conn.close()
                 st.success("✅ Изменения сохранены в БД!")
